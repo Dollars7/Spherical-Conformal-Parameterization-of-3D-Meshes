@@ -220,11 +220,13 @@ Please consult the repository history and
 [`Python_latest/LICENSE.md`](Python_latest/LICENSE.md) for the attribution and
 license information associated with the included half-edge components.
 
-## License
+## License and Attribution
 
-The bundled half-edge mesh component is distributed under the MIT License. See
-[`Python_latest/LICENSE.md`](Python_latest/LICENSE.md) for details.
+This repository includes a third-party half-edge mesh implementation distributed
+under the MIT License. See
+[`Python_latest/LICENSE.md`](Python_latest/LICENSE.md) for the original copyright
+and license notice.
 
-Because this repository contains extended academic and third-party material,
-verify that all required attribution is retained when redistributing or
-incorporating the code into another project.
+Other portions of this repository were developed as part of CSE570Project3.
+Their project-wide licensing status has not yet been specified. Please contact
+the repository maintainer before reusing or redistributing those portions.
