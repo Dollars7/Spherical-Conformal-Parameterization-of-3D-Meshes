@@ -10,6 +10,69 @@ optimization, fold removal, and quasi-conformal distortion metrics.
 Extended from **CSE570Project3** as an educational and experimental implementation of
 spherical mesh parameterization.
 
+![Spherical conformal parameterization of a cortical surface mesh](Python_latest/output/comparison_fast.png)
+
+*A 2502-vertex cortical surface mapped to `S²`. The checkerboard is laid out in the
+spherical coordinates of the image and pulled back onto the source by vertex
+correspondence — it is the visual conformality test. A conformal map carries the cells
+to cells that change **size** but not **shape**, which is what the top-left panel shows:
+the cells stretch and shrink with curvature but stay square, never shearing into
+slivers. The bottom row localizes the Beltrami modulus `|μ|`, with distortion
+concentrating where the surface has to flatten the most.*
+
+## Results at a Glance
+
+Cortical surface, 2502 vertices / 5000 faces, single-threaded on a laptop CPU:
+
+| Measure | Initial (Gauss map) | After optimization | Ideal value |
+|---|---|---|---|
+| Harmonic energy `E` | `523.9` | `12.694` | — |
+| Map degree | **2** — wraps twice | **1** ✓ | exactly 1, or it is not a bijection |
+| Inverted faces | 2395 / 5000 (47.9 %) | **0 / 5000** ✓ | 0 |
+| Mean \|μ\| | 0.768 | **0.055** | 0 = conformal |
+| Median dilatation `K` | 23.85 | **1.089** | 1 = conformal |
+| Conformality gap | +1.036 | **+0.012** | 0 = conformal |
+| Runtime | — | 4.1 s | — |
+
+On the final map 88 % of faces have `|μ| < 0.1` (dilatation `K < 1.22`) and 98 % have
+`|μ| < 0.2`, and the result is verified to be a genuine bijection — degree exactly 1
+with every face positively oriented. Full table including the bunny mesh and the second
+solver in §9.
+
+## What This Implementation Does Differently
+
+Most spherical-parameterization code reports a harmonic energy and stops. Energy alone
+does not tell you whether the result is usable: the harmonic energy is **blind to
+folding**, so a folded, non-invertible map can have a perfectly attractive energy value.
+The emphasis here is on proving properties of the output rather than displaying a
+number that looks good.
+
+- **Bijectivity is verified, not assumed.** The total signed solid angle over all
+  spherical triangles is checked to be exactly `4π` (degree 1) with every face
+  positively oriented. Without that check, the flow silently ships a map with folds.
+
+- **Folds are removed, not tolerated.** A local untangling pass (§4.6) closes the gap
+  that harmonic energy cannot see, taking 4 residual inverted faces to 0 at a cost of
+  0.14 % in energy.
+
+- **A conformality bound ties two independent code paths together.** `E(f) ≥ Area(f(M))`
+  with equality exactly when the map is conformal. The left side comes from the
+  cotangent Laplacian, the right from the image geometry; nothing forces them to agree,
+  so their agreement to 1.2 % is real evidence (§8).
+
+- **Two independent solvers cross-check each other.** Different search directions,
+  retractions, and line-search quantities, converging to within 0.18 % — as do the two
+  independent mesh parsers, to all printed digits.
+
+- **The optimization is written from first principles.** Manifold retraction, Riemannian
+  gradient, Barzilai–Borwein steps, Zhang–Hager nonmonotone line search, and the Wen–Yin
+  Cayley curvilinear method with its Sherman–Morrison–Woodbury low-rank form — a
+  **3338× speedup** on the Cayley step. No `scipy.optimize` is involved.
+
+- **The tests are mutation-verified.** Every numerical test was checked by reintroducing
+  the original defect and confirming it fails. Two of the first batch passed happily
+  against reinstated bugs and had to be rewritten (§6).
+
 ## Overview
 
 Spherical parameterization transforms a surface with sphere-like topology into a mapping
@@ -505,6 +568,16 @@ image — two code paths that share nothing.
 
 Gauss-map initialization, default parameters, single-threaded on a laptop CPU.
 Timings vary by roughly 2× run to run on a loaded machine.
+
+The starting point, for comparison with the figure at the top of this file:
+
+![The Gauss map initialization, before optimization](Python_latest/output/comparison_init.png)
+
+*The same mesh under the initial Gauss map. Nearly half the faces are inverted and the
+image wraps the sphere twice, so the checkerboard cells are torn and folded rather than
+merely stretched. Note that the `|μ|` colour scale is auto-ranged per figure — this one
+tops out at 1.0 against 0.23 in the result above, so compare the numbers rather than the
+colours.*
 
 | Mesh | Stage | Time | `E(F)` | deg | gap | mean \|μ\| | median `K` | inverted faces |
 |---|---|---|---|---|---|---|---|---|
