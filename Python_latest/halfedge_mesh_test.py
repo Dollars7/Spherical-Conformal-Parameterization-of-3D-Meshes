@@ -220,9 +220,11 @@ def test_internal_cross_product():
     assert halfedge_mesh.cross_product(v_i, v_j) == v_k
     assert halfedge_mesh.cross_product(v_j, v_k) == v_i
     assert halfedge_mesh.cross_product(v_k, v_i) == v_j
-    assert halfedge_mesh.cross_product(v_j, v_i) == map(lambda x: -x, v_k)
-    assert halfedge_mesh.cross_product(v_i, v_k) == map(lambda x: -x, v_j)
-    assert halfedge_mesh.cross_product(v_k, v_j) == map(lambda x: -x, v_i)
+    # NB: in Python 3 `map` returns an iterator, which never compares equal to
+    # a list -- these three assertions were vacuous under py2-era code.
+    assert halfedge_mesh.cross_product(v_j, v_i) == [-x for x in v_k]
+    assert halfedge_mesh.cross_product(v_i, v_k) == [-x for x in v_j]
+    assert halfedge_mesh.cross_product(v_k, v_j) == [-x for x in v_i]
 
 
 def test_allclose_list_int_float():
@@ -287,8 +289,4 @@ def test_create_vector():
 
     p3 = [4,4,4]
     v = halfedge_mesh.create_vector(p2, p3)
-    print(v)
     assert halfedge_mesh.allclose(v, [5,5,5])
-
-test_create_vector()
-print('hello')

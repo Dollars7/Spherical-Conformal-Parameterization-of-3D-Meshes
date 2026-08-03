@@ -3,17 +3,29 @@ import math
 from optimization import allclose, make_iterable, dot, norm, normalize, cross_product, create_vector
 
 class HalfedgeMesh:
-    def __init__(self, filename=None, vertices=[], halfedges=[], facets=[]):
-        self.vertices = vertices  # List of Vertex types
-        self.halfedges = halfedges  # List of HalfEdge types
-        self.facets = facets  # List of Facet types
+    """Half-edge (DCEL) representation of a triangulated surface.
+
+    Conventions, relied upon throughout the codebase:
+      * `Halfedge.vertex` is the halfedge's TARGET vertex.  The origin is
+        therefore `halfedge.prev.vertex`.
+      * `Vertex.halfedge` is an OUTGOING halfedge of that vertex, so the
+        one-ring is walked with `he = he.opposite.next`.
+      * `Facet` vertex indices (a, b, c) are counter-clockwise.
+    """
+
+    def __init__(self, filename=None, vertices=None, halfedges=None, facets=None):
+        # NB: default to None rather than [] -- a mutable default would be
+        # shared by every mesh constructed without an explicit list.
+        self.vertices = [] if vertices is None else vertices  # List of Vertex types
+        self.halfedges = [] if halfedges is None else halfedges  # List of HalfEdge types
+        self.facets = [] if facets is None else facets  # List of Facet types
         self.filename = filename  # File path for mesh data
         # dictionary of all the edges given indexes
-        # Which is faster?
         self.edges = {} # Empty dictionary to store edge pairs and their halfedges
         if filename:
-            self.vertices, self.halfedges, self.facets, self.edges = \
-                    self.read_file(filename)
+            parsed = self.read_file(filename)
+            if parsed is not None:
+                self.vertices, self.halfedges, self.facets, self.edges = parsed
 
     def __eq__(self, other):
         return (isinstance(other, type(self)) and 
@@ -59,8 +71,9 @@ class HalfedgeMesh:
         except ValueError as e:
             print(f"Value error: {e}")
 
-        # Return empty structures if there was an error
-        return [], [], [], {}
+        # Signal failure explicitly; an empty 4-tuple would look like a
+        # successfully parsed but empty mesh.
+        return None
 
     def read_off_vertices(self, file_object, number_vertices):
         """Read each line of the file_object and return a list of Vertex types.
@@ -86,6 +99,7 @@ class HalfedgeMesh:
         facets = []
         Edges = {}  # Dictionary to store halfedges based on vertex pairs (u, v)
         halfedge_count = 0
+        duplicate_edges = 0
 
         # First pass: Create halfedges without setting opposites
         for index in range(number_facets):
@@ -99,20 +113,24 @@ class HalfedgeMesh:
             # Define the edges of this facet
             all_facet_edges = list(zip(line[1:], line[2:] + [line[1]]))
 
-            for i in range(3):
-                u, v = all_facet_edges[i]
+            for u, v in all_facet_edges:
+                if (u, v) in Edges:
+                    # A directed edge shared by two facets means the surface is
+                    # non-manifold or inconsistently oriented.  Keep the first
+                    # halfedge rather than silently rebinding it to this facet.
+                    duplicate_edges += 1
+                    continue
 
-                if (u, v) not in Edges:
-                    Edges[(u, v)] = Halfedge(vertex=vertices[u], facet=facet, index=halfedge_count)
-                    halfedge_count += 1
-                    # Set the half-edge for the vertex if it hasn't been set
-                    if vertices[u].halfedge is None:
-                        vertices[u].halfedge = Edges[(u, v)]
-                # else:
-                #     print(f"Duplicate half-edge detected between vertices {u} and {v}.")
-                # Assign facet and vertex reference
-                Edges[(u, v)].facet = facet
-                vertices[v].halfedge = Edges[(u, v)]
+                # `vertex` is the TARGET of the halfedge u -> v, and
+                # `vertices[u].halfedge` is an OUTGOING halfedge of u.  Both
+                # are required by the one-ring walk (he.opposite.next) and by
+                # Halfedge.get_angle_normal, which reads the origin as
+                # he.prev.vertex.
+                Edges[(u, v)] = Halfedge(vertex=vertices[v], facet=facet,
+                                         index=halfedge_count)
+                halfedge_count += 1
+                if vertices[u].halfedge is None:
+                    vertices[u].halfedge = Edges[(u, v)]
 
             # Set the halfedge of the facet to one of its halfedges
             facet.halfedge = Edges[all_facet_edges[0]]
@@ -130,60 +148,55 @@ class HalfedgeMesh:
             if (v, u) in Edges:
                 halfedge.opposite = Edges[(v, u)]
                 Edges[(v, u)].opposite = halfedge
-            # else:
-            #     print(f"Warning: No opposite edge found for edge from vertex {u} to {v} "
-            #           f"({vertices[u].x}, {vertices[u].y}, {vertices[u].z}) to "
-            #           f"({vertices[v].x}, {vertices[v].y}, {vertices[v].z}). "
-            #           f"Total facets: {len(facets)}, Total vertices: {len(vertices)}.")
+
+        if duplicate_edges:
+            print(f"Warning: {duplicate_edges} duplicate directed edge(s); "
+                  f"the mesh is non-manifold or inconsistently oriented.")
         return facets, Edges
 
     def build_halfedge(self, vertices, facets):
-        """Builds halfedge structure from vertices and facets."""
+        """Builds halfedge structure from vertices and facets.
+
+        Uses the same conventions as the OFF path: `Halfedge.vertex` is the
+        target vertex and `Vertex.halfedge` is an outgoing halfedge.
+        """
         edges = {}
         halfedges = []
+        duplicate_edges = 0
 
         for facet in facets:
             facet_vertices = [facet.a, facet.b, facet.c]
-            first_halfedge = None
-            prev_halfedge = None
+            facet_edges = [(facet_vertices[i],
+                            facet_vertices[(i + 1) % 3]) for i in range(3)]
 
-            for i in range(len(facet_vertices)):
-                start = facet_vertices[i]
-                end = facet_vertices[(i + 1) % len(facet_vertices)]
+            for start, end in facet_edges:
+                if (start, end) in edges:
+                    duplicate_edges += 1
+                    continue
+                he = Halfedge(vertex=vertices[end], facet=facet, index=len(halfedges))
+                halfedges.append(he)
+                edges[(start, end)] = he
+                if vertices[start].halfedge is None:
+                    vertices[start].halfedge = he
 
-                # 如果边不存在，则创建新的半边
-                if (start, end) not in edges:
-                    he = Halfedge(vertex=vertices[end], facet=facet, index=len(halfedges))
-                    halfedges.append(he)
-                    edges[(start, end)] = he
+            # Link next/prev around the facet, unconditionally -- doing this
+            # inside the creation branch above leaves the cycle broken whenever
+            # an edge was already present.
+            for i in range(3):
+                edges[facet_edges[i]].next = edges[facet_edges[(i + 1) % 3]]
+                edges[facet_edges[i]].prev = edges[facet_edges[(i - 1) % 3]]
 
-                    # # 将 halfedge 添加到起点顶点的 halfedges 列表中
-                    # vertices[start].halfedges.append(he)
+            facet.halfedge = edges[facet_edges[0]]
 
-                    # 确认half-edge环的连接
-                    if first_halfedge is None:
-                        first_halfedge = he
+        # Pair opposites once every halfedge exists, rather than while the
+        # incident facets are still being built.
+        for (u, v), he in edges.items():
+            if (v, u) in edges:
+                he.opposite = edges[(v, u)]
 
-                    if prev_halfedge is not None:
-                        prev_halfedge.next = he
-                        he.prev = prev_halfedge
-
-                    prev_halfedge = he
-
-                # Link opposite halfedges
-                if (end, start) in edges:
-                    edges[(start, end)].opposite = edges[(end, start)]
-                    edges[(end, start)].opposite = edges[(start, end)]
-
-            # Close the loop of the facet's halfedges
-            if first_halfedge and prev_halfedge:
-                first_halfedge.prev = prev_halfedge
-                prev_halfedge.next = first_halfedge
-
-            facet.halfedge = first_halfedge
-            # 调试输出: 确认half-edge环
-            # print(f"Facet {facet.index}: first halfedge = {first_halfedge.index}, "
-            #       f"vertices = {facet_vertices}")
+        if duplicate_edges:
+            print(f"Warning: {duplicate_edges} duplicate directed edge(s); "
+                  f"the mesh is non-manifold or inconsistently oriented.")
         return vertices, halfedges, facets, edges
 
     def parse_off(self, file_object):
@@ -236,6 +249,26 @@ class HalfedgeMesh:
         Returns a halfedge
         """
         return self.edges[(u, v)]
+
+    def get_vertex_matrix(self):
+        """Return vertex positions as a list of [x, y, z] triples."""
+        return [v.get_vertex() for v in self.vertices]
+
+    def update_vertices(self, new_vertices):
+        """Overwrite vertex positions in place, keeping the connectivity.
+
+        new_vertices - sequence of [x, y, z] triples, one per vertex, in the
+                       mesh's vertex order.
+
+        The Vertex objects are mutated rather than replaced, so every halfedge
+        and facet keeps pointing at the right vertex.
+        """
+        if len(new_vertices) != len(self.vertices):
+            raise ValueError(
+                f"expected {len(self.vertices)} positions, got {len(new_vertices)}")
+        for vertex, point in zip(self.vertices, new_vertices):
+            vertex.x, vertex.y, vertex.z = float(point[0]), float(point[1]), float(point[2])
+        return self.vertices
 
     def calculate_vertex_normals(self):
         # Step 1: Initialize vertex normals to zero for accumulation
@@ -322,6 +355,9 @@ class Vertex:
         self.z = z
         self.index = index
         self.halfedge = halfedge
+        # Filled in by HalfedgeMesh.calculate_vertex_normals(); declared here
+        # so the attribute always exists.
+        self.normal = [0.0, 0.0, 0.0]
 
     def __eq__(x, y):
         return x.__key() == y.__key() and type(x) == type(y)
@@ -357,9 +393,11 @@ class Facet:
             and self.index == other.index and self.halfedge == other.halfedge
 
     def __hash__(self):
+        # NB: `self.halfedges` (plural) does not exist -- hashing a Facet used
+        # to raise AttributeError.
         return hash(self.halfedge) ^ hash(self.a) ^ hash(self.b) ^ \
             hash(self.c) ^ hash(self.index) ^ \
-            hash((self.halfedges, self.a, self.b, self.c, self.index))
+            hash((self.halfedge, self.a, self.b, self.c, self.index))
 
     def get_normal(self):
         """Calculate the normal of facet
