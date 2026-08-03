@@ -1,10 +1,53 @@
 # Spherical Conformal Parameterization of 3D Meshes
 
-A pure-Python reference implementation of spherical conformal parameterization for
-closed genus-zero triangular meshes, computed by minimizing the discrete harmonic
-energy of a map onto the unit sphere `S²`.
+A geometry-processing project that maps a closed genus-zero triangular mesh onto the
+unit sphere `S²` by minimizing discrete harmonic energy.
 
-Extended from CSE 570 Project 3.
+The implementation is pure Python over NumPy and SciPy, and includes a half-edge mesh
+representation, cotangent-weighted discrete operators, manifold-constrained
+optimization, fold removal, and quasi-conformal distortion metrics.
+
+Extended from **CSE570Project3** as an educational and experimental implementation of
+spherical mesh parameterization.
+
+## Overview
+
+Spherical parameterization transforms a surface with sphere-like topology into a mapping
+
+```
+F : M → S²
+```
+
+assigning every mesh vertex a point on the unit sphere. This project approximates such a
+mapping by minimizing the discrete harmonic energy
+
+```
+E(F) = ½ tr(Fᵀ L F)
+```
+
+where `L` is a cotangent-weighted discrete Laplace–Beltrami operator, subject to
+`‖F_i‖₂ = 1` at every vertex. Section 1 states the problem precisely, including the
+second constraint that makes it well-posed.
+
+## Features
+
+- Half-edge representation for triangular surface meshes, with OFF and OBJ loading
+- Cotangent-weighted discrete Laplacian, assembled sparsely and vectorized over facets
+- Gauss-map and Laplace–Beltrami spectral initializations
+- Two hand-written manifold-constrained solvers: projected gradient with a
+  Barzilai–Borwein step, and a Wen–Yin Cayley curvilinear search in low-rank form
+- Zhang–Hager nonmonotone line search
+- Local untangling pass that removes residual folds, so the result is a genuine bijection
+- Quasi-conformal (Beltrami), area-distortion, map-degree, and conformality-gap metrics
+- Matplotlib figure comparing source and sphere, with a checkerboard conformality test
+- OBJ export for mapped meshes, normals, and intermediate results
+- 45 tests, the numerical half verified by mutation
+
+**On SciPy.** SciPy is used for sparse matrices and the eigensolver. The optimization
+routines themselves are written from first principles — no `scipy.optimize` solver is
+involved — which is the point of the exercise: the Laplace–Beltrami operator, harmonic
+maps, and manifold-constrained optimization are built directly rather than delegated to
+an off-the-shelf package.
 
 ---
 
@@ -52,7 +95,7 @@ subject to  ‖F_i‖₂ = 1        for i = 1,…,n        (spherical)
 
 The first constraint set, `{ F : diag(F Fᵀ) = I_n }`, is the **oblique manifold**
 `OB(3, n)` — the product of `n` copies of `S²`, *not* the Stiefel manifold. This
-distinction determines which retraction is admissible (§4.4).
+distinction determines which retraction is admissible (§4.5).
 
 The second constraint is **not cosmetic**. `E` is invariant under Möbius
 transformations of `S²`, and among those degrees of freedom is the collapse of the
@@ -70,19 +113,23 @@ descends to `~1e-12` with 100 % of faces degenerate.
 
 ## 2. Repository Layout
 
-```
-Python_latest/
-├── main.py                  Driver / CLI (was test.py)
-├── visualize.py             Renders the source/sphere comparison figure
-├── mesh.py                  Half-edge structure, OFF/OBJ parsers, vertex normals
-├── optimization.py          Laplacian, energy, gradients, solvers, untangling, metrics
-├── config.py                Global numerical tolerance (EPSILON = 1e-6)
-├── halfedge_mesh_test.py    pytest suite for the half-edge structure
-├── requirements.txt         numpy, scipy, pytest
-├── setup.py / setup.cfg     Packaging
-├── runtests.py              Vendored legacy py.test bootstrap (unused)
-├── tests/data/              Input meshes: brain, bunny, teapot, cube (.off/.obj/.ply/.m)
-└── output/                  Generated parameterizations (.obj) and viewer dumps (.txt)
+```text
+.
+├── README.md
+└── Python_latest/
+    ├── main.py                  # Driver / CLI (was test.py)
+    ├── visualize.py             # Renders the source/sphere comparison figure
+    ├── mesh.py                  # Half-edge structure, OFF/OBJ parsers, vertex normals
+    ├── optimization.py          # Laplacian, energy, solvers, untangling, metrics
+    ├── config.py                # Global numerical tolerance (EPSILON = 1e-6)
+    ├── halfedge_mesh_test.py    # Half-edge regression tests
+    ├── optimization_test.py     # Numerical regression tests
+    ├── requirements.txt         # numpy, scipy, matplotlib, pytest
+    ├── setup.py / setup.cfg     # Packaging
+    ├── runtests.py              # Vendored legacy py.test bootstrap (unused)
+    ├── tests/data/              # Example OFF and OBJ meshes
+    ├── output/                  # Generated mappings and visualization files
+    └── LICENSE.md
 ```
 
 ---
@@ -128,6 +175,15 @@ silently rebound.
 The two paths produce identical results: `brain.obj` and `brain_python.off` describe the
 same surface and converge to the same energy to all printed digits.
 
+### 3.3 Input Assumptions
+
+The algorithm is intended for meshes that are **connected, closed (no boundary),
+orientable, triangulated, and genus zero**. Meshes violating these assumptions may fail
+to load, produce invalid half-edge connectivity, or yield unstable mappings.
+
+The driver computes the Euler characteristic `χ = V − E + F` at load time and warns when
+`χ ≠ 2`, since a spherical parameterization is not guaranteed to exist in that case.
+
 ---
 
 ## 4. Algorithm Pipeline
@@ -140,7 +196,7 @@ load mesh
      └─ assemble L from P                    <-- before any map is applied
         └─ build initial map F0 on S²         (separate array; P is never overwritten)
            └─ minimize E(F) subject to the constraints of §1.1
-              └─ report energy + distortion, save
+              └─ untangle residual folds, report energy + distortion, save
 ```
 
 The Laplacian is assembled from the source geometry and the initial map is held in its
@@ -218,16 +274,26 @@ a **6 × 6** solve instead of an `n × n` inverse. Measured on the brain mesh
 (`n = 2502`): **575.6 ms → 0.17 ms per step, a 3338× speedup**, agreeing with the dense
 formula to `2.7e-15`. Over 5 000 iterations that is 48 minutes versus 0.9 seconds.
 
-Two details matter for correctness:
+Three details matter:
 
 * **Retraction.** The Cayley transform is a retraction for the *Stiefel* manifold
   (`XᵀX = I`); our constraint is the oblique manifold. Left-multiplying by an orthogonal
   matrix preserves `‖X‖_F` but not the individual row norms, so the curve is used only
   to generate the search direction and the iterate is retracted back onto the
   constraint set afterwards.
+
 * **Descent quantity.** The derivative of `E` along the Cayley curve at `τ = 0` is
   `−‖A‖_F²/2`, not `−‖∇E‖²`. The Armijo test uses `‖A‖_F²/2`, evaluated without forming
-  `A` via `‖A‖_F² = 2 tr(XᵀX GᵀG) − 2 tr((GᵀX)²)` — only 3 × 3 products.
+  `A` via `‖A‖_F² = 2 tr(XᵀX GᵀG) − 2 tr((GᵀX)²)` — only 3 × 3 products. This is a
+  matter of using the correct directional derivative rather than a convergence fix:
+  `‖A‖_F²/2` runs 120–1000× larger than `‖∇E‖²`, so substituting the latter merely
+  makes the acceptance test looser, and both converge to the same energy to five digits.
+
+* **Backtracking schedule.** This solver is genuinely sensitive to it. The step must be
+  able to shrink several orders of magnitude from `initial_step_size = 0.1`: at a
+  factor of `0.9` over 20 trials it only reaches `1.2e-2`, no acceptable step is found,
+  and the search stalls at iteration 0 leaving the initial map untouched. Halving over
+  30 trials reaches `1e-10` and converges.
 
 ### 4.6 Untangling Pass (`--untangle`)
 
@@ -244,7 +310,7 @@ P(F) = Σ_t max(0, δ − s_t)²
 It grows a patch of a few vertex rings around each fold, pins the surrounding ring, and
 minimizes `E(F) + w·P(F)` over the free vertices only, raising `w` geometrically until
 no inverted face remains. Because the patch is a few dozen vertices, the conformality
-already achieved elsewhere is untouched: on the brain the energy rises 0.09 % and mean
+already achieved elsewhere is untouched: on the brain the energy rises 0.14 % and mean
 `|μ|` moves from 0.0551 to 0.0552, while inverted faces go 4 → 0. On the bunny the
 distortion statistics actually *improve* (p95 `|μ|` 0.993 → 0.711), because the
 collapsed faces were dragging them down.
@@ -262,24 +328,51 @@ collapsed faces were dragging them down.
 
 ---
 
-## 5. Usage
+## 5. Installation
 
-### Requirements
-
-Python ≥ 3.8, `numpy`, `scipy`; `pytest` for the tests.
+Clone the repository:
 
 ```bash
-pip install -r Python_latest/requirements.txt
+git clone https://github.com/Dollars7/Spherical-Conformal-Parameterization-of-3D-Meshes.git
+cd Spherical-Conformal-Parameterization-of-3D-Meshes/Python_latest
 ```
 
-### Running
+Python 3.8 or newer. Create a virtual environment and install the dependencies.
+
+### Windows PowerShell
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python -m pip install --upgrade pip
+.\.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+### macOS or Linux
 
 ```bash
-cd Python_latest
-python main.py --input tests/data/brain_python.off --solver both --untangle
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-(PowerShell does not accept `&&`; use `;` or separate lines.)
+---
+
+## 6. Usage
+
+Run from the `Python_latest` directory. PowerShell does not accept `&&`; use `;` or
+separate lines.
+
+### Windows
+
+```powershell
+.\.venv\Scripts\python main.py --input tests/data/brain_python.off --solver both --untangle
+```
+
+### macOS or Linux
+
+```bash
+.venv/bin/python main.py --input tests/data/brain_python.off --solver both --untangle
+```
 
 | Flag | Meaning |
 |---|---|
@@ -298,7 +391,6 @@ python main.py --input tests/data/brain_python.off --solver both --untangle
 ### Visualizing a result
 
 ```bash
-cd Python_latest
 python visualize.py --mapping output/spherical_mapping_fast.obj --out output/comparison.png
 ```
 
@@ -309,20 +401,32 @@ not *shape* — and both surfaces coloured by `|μ|`. The `|μ|` colour range is
 auto-scaled to the 99th percentile of each map, so **do not compare colours between two
 figures**; compare the numbers in the titles.
 
-### Tests
+The exported `.obj` files can also be inspected directly in Blender, MeshLab, or any
+other compatible mesh viewer.
+
+### Running the tests
 
 ```bash
-cd Python_latest
-pytest halfedge_mesh_test.py
+pytest
 ```
 
-23 tests covering half-edge connectivity invariants (`next`/`prev`/`opposite`
-consistency, one-ring traversal, facet normals, dihedral angles) on the cube and bunny
-fixtures, plus the vector helpers.
+* `halfedge_mesh_test.py` — 23 tests on half-edge connectivity invariants
+  (`next`/`prev`/`opposite` consistency, one-ring traversal, facet normals, dihedral
+  angles) over the cube and bunny fixtures, plus the vector helpers.
+* `optimization_test.py` — 22 numerical tests: the cotangent weights against a hand-
+  computed reference, the Woodbury identity against the dense Cayley form, `|μ|`
+  against analytically known values, the conformality bound, and end-to-end runs of
+  both solvers and the untangling pass.
+
+Every test in the second file pins a property that was wrong at some point, and each was
+checked by mutation — reintroducing the original defect and confirming the intended test
+fails. That step is worth repeating for anything added: of the first batch written, two
+passed happily against reinstated bugs and had to be replaced with a direct test of the
+acceptance predicate and an end-to-end run of Solver B.
 
 ---
 
-## 6. Outputs
+## 7. Outputs
 
 | File | Content |
 |---|---|
@@ -337,7 +441,7 @@ parameterization are in vertex-index correspondence and can be overlaid directly
 
 ---
 
-## 7. Distortion Metrics
+## 8. Distortion Metrics
 
 The pipeline reports map quality rather than only the energy value.
 
@@ -397,7 +501,7 @@ image — two code paths that share nothing.
 
 ---
 
-## 8. Results
+## 9. Results
 
 Gauss-map initialization, default parameters, single-threaded on a laptop CPU.
 Timings vary by roughly 2× run to run on a loaded machine.
@@ -441,7 +545,7 @@ at any gap.
 
 ---
 
-## 9. Known Limitations
+## 10. Known Limitations
 
 **Bijectivity requires the `--untangle` post-pass.** The flow alone leaves 4 of 5000
 faces inverted on the brain and 22 of 500 on the bunny, because harmonic energy is
@@ -482,20 +586,35 @@ which is one admissible choice among many; the remaining Möbius freedom could b
 minimizing area distortion instead, which is what area-preserving spherical
 parameterization methods do.
 
+**Degenerate triangles are handled by a single global tolerance.** `config.EPSILON`
+guards the cotangent, the retraction, and the frame construction; meshes with many
+near-zero-area faces would benefit from stronger, more local safeguards.
+
 **Complexity.** The Laplacian is sparse and each Cayley step is `O(n p²)`, so the
 per-iteration cost is linear in `n`. `weighted_lb_eigen_projection` falls back to a
 dense `eigh` for meshes smaller than the requested eigenvector count, and
 `report_distortion` is `O(m)` dense per call.
 
 **Structural.** `runtests.py` is a vendored legacy py.test bootstrap that is not part of
-the build and can be removed. `compute_laplacian(vertex)` was dead and buggy and has
-been deleted. The `output/spherical_mapping_{1..4}.obj` and `*_ortho_{1,2,3}.obj`
-artifacts committed to the repository are stale — they came from a smoothing loop that
-no longer exists.
+the build and can be removed. The `output/spherical_mapping_{1..4}.obj` and
+`*_ortho_{1,2,3}.obj` artifacts committed to the repository are stale — they came from a
+smoothing loop that no longer exists.
 
 ---
 
-## 10. References
+## 11. Future Work
+
+- Fold-free initialization (Tutte embedding of the cut disk, then inverse stereographic
+  projection), removing the need for the untangling pass
+- Spend the residual Möbius freedom on minimizing area distortion
+- A stationarity measure that accounts for the mass-centre constraint, so `--tol` fires
+  instead of the run always ending on energy stagnation
+- Continuous integration, and benchmarks across mesh resolutions
+- Landmark-constrained variants, and comparison against the linear stereographic method
+
+---
+
+## 12. References
 
 1. X. Gu, Y. Wang, T. F. Chan, P. M. Thompson, S.-T. Yau. *Genus Zero Surface Conformal
    Mapping and Its Application to Brain Surface Mapping.* IEEE Transactions on Medical
@@ -517,10 +636,21 @@ no longer exists.
 
 ---
 
-## 11. Attribution and License
+## 13. Acknowledgements
+
+This project was extended from **CSE570Project3** and includes a Python half-edge mesh
+implementation used for educational geometry-processing experiments.
+
+## 14. License and Attribution
 
 The half-edge data structure and its OFF parser derive from
-[`halfedge_mesh`](https://github.com/carlosrojas/halfedge_mesh) by Carlos Rojas, used
-under the MIT License (see `Python_latest/LICENSE.md`). The parameterization,
-Laplacian assembly, energy, optimization, and distortion code in `optimization.py` are
-original to this project.
+[`halfedge_mesh`](https://github.com/carlosrojas/halfedge_mesh) by Carlos Rojas,
+distributed under the MIT License. See
+[`Python_latest/LICENSE.md`](Python_latest/LICENSE.md) for the original copyright and
+license notice.
+
+The parameterization, Laplacian assembly, energy, optimization, untangling, and
+distortion code in `optimization.py` are original to this project. Other portions were
+developed as part of CSE570Project3; their project-wide licensing status has not yet
+been specified. Please contact the repository maintainer before reusing or
+redistributing those portions.
