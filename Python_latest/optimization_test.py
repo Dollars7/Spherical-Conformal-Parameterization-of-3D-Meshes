@@ -216,6 +216,67 @@ def test_gap_denominator_is_image_area_not_four_pi(solved):
 # Solvers and untangling, end to end
 # ---------------------------------------------------------------------------
 
+def test_nonmonotone_acceptance_requires_an_actual_decrease():
+    """Pins the sign of the sufficient-decrease test.
+
+    Written with `+` instead of `-`, every trial step is accepted on the first
+    try, the line search never backtracks, and the solver quietly degenerates to
+    a fixed step size -- while still converging well enough that no end-to-end
+    assertion notices.  Only a direct test of the predicate catches it.
+    """
+    rho, tau, descent, ref = 0.5, 0.2, 4.0, 10.0
+    margin = rho * tau * descent                       # 0.4
+
+    assert O.nonmonotone_accepts(ref - margin, ref, rho, tau, descent)
+    assert O.nonmonotone_accepts(ref - 2 * margin, ref, rho, tau, descent)
+    assert not O.nonmonotone_accepts(ref - margin + 1e-9, ref, rho, tau, descent)
+
+    # an energy INCREASE must never be accepted; under the `+` sign every one
+    # of these would pass
+    for worse in (ref, ref + 1e-9, ref + margin - 1e-9, ref + margin, ref + 10.0):
+        assert not O.nonmonotone_accepts(worse, ref, rho, tau, descent)
+
+
+def test_cayley_descent_matches_the_frobenius_norm_of_A():
+    """||A||_F^2 computed via 3x3 traces must equal the explicit n x n form.
+
+    This is the quantity the Cayley line search tests against; substituting
+    ||grad E||^2 stalls Solver B at the first iteration.
+    """
+    rng = np.random.RandomState(11)
+    n = 25
+    A0 = rng.randn(n, n)
+    L = A0 + A0.T
+    L -= np.diag(L.sum(1))
+    X = O.retract(rng.randn(n, 3))
+    G = L @ X
+
+    A = G @ X.T - X @ G.T
+    assert O._cayley_descent(X, G) == pytest.approx(float(np.sum(A * A)), rel=1e-9)
+    # and it is a genuinely different quantity from the projected gradient norm
+    grad = O.project_gradient_to_sphere(G, X)
+    assert O._cayley_descent(X, G) / 2.0 != pytest.approx(float(np.sum(grad ** 2)),
+                                                          rel=1e-3)
+
+
+def test_solver_b_reduces_energy_and_reaches_degree_one(solved):
+    """End-to-end guard on the Cayley solver.
+
+    Solver A was covered but Solver B was not, so a wrong descent quantity --
+    which makes the line search fail at iteration 0 and return the initial map
+    untouched -- went undetected.
+    """
+    mesh, L, F0 = solved['mesh'], solved['L'], solved['F0']
+    F = O.orthogonal_constrained_optimization(
+        mesh, F0, 1e-6, max_iterations=20000, L=L,
+        retraction=O.make_retraction(O.vertex_areas(mesh, solved['source'])),
+        verbose=False)
+    assert O.E(F, L) < 0.2 * O.E(F0, L)
+    assert np.allclose(np.linalg.norm(F, axis=1), 1.0, atol=1e-6)
+    assert O.map_degree(mesh, F) == pytest.approx(1.0, abs=1e-6)
+    assert O.conformality_gap(mesh, F, L=L) < 0.5
+
+
 def test_flow_reduces_energy_and_reaches_degree_one(solved):
     mesh, L, F0, F = solved['mesh'], solved['L'], solved['F0'], solved['F']
     assert O.E(F, L) < 0.1 * O.E(F0, L)

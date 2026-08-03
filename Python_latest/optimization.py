@@ -330,6 +330,25 @@ def weighted_lb_eigen_projection(mesh, L=None, num_eigenvectors=3, tol=1e-8):
 # Solver A -- projected gradient descent, BB step + nonmonotone line search
 # ---------------------------------------------------------------------------
 
+def nonmonotone_accepts(energy_new, reference, rho, tau, descent):
+    """Zhang-Hager nonmonotone sufficient-decrease test.
+
+        E(Y(tau)) <= C_k - rho * tau * descent
+
+    measured against the nonmonotone reference value C_k rather than the last
+    energy.  `descent` is the magnitude of the directional derivative along the
+    search curve: ||grad E||^2 for a projected-gradient step, ||A||_F^2 / 2 for
+    the Cayley curve -- passing the wrong one makes the test meaningless even
+    though it still type-checks.
+
+    The sign is the whole content of this function, which is why it is a named
+    function rather than an inline comparison: written with `+`, the condition
+    is satisfied by the very first trial step unconditionally, the line search
+    never backtracks, and the method silently degenerates to a fixed step size.
+    """
+    return energy_new <= reference - rho * tau * descent
+
+
 def _bb_step(S, Y, k, lo=1e-10, hi=1e10):
     """Barzilai-Borwein trial step, alternating BB1 / BB2."""
     sy = abs(float(np.sum(S * Y)))
@@ -404,7 +423,7 @@ def fast_algorithm(F0, rho, delta, xi, epsilon, mesh, max_iter=1000, L=None,
         for _ in range(30):
             F_next = gradient_step(F_k, tau_k, L, grad=G_k, retraction=retraction)
             E_next = E(F_next, L)
-            if E_next <= C_k - rho * tau_k * gnorm_sq:
+            if nonmonotone_accepts(E_next, C_k, rho, tau_k, gnorm_sq):
                 break
             tau_k *= delta
         else:
@@ -532,7 +551,7 @@ def orthogonal_constrained_optimization(mesh, F0, tolerance, max_iterations=1000
         for _ in range(30):
             X_next = retraction(cayley_step(X, G, tau))
             E_next = E(X_next, L)
-            if E_next <= C_k - rho * tau * descent:
+            if nonmonotone_accepts(E_next, C_k, rho, tau, descent):
                 break
             tau *= 0.5
         else:
