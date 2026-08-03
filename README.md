@@ -1,14 +1,9 @@
 # Spherical Conformal Parameterization of 3D Meshes
 
-A geometry-processing project that maps a closed genus-zero triangular mesh onto the
-unit sphere `S²` by minimizing discrete harmonic energy.
-
-The implementation is pure Python over NumPy and SciPy, and includes a half-edge mesh
-representation, cotangent-weighted discrete operators, manifold-constrained
-optimization, fold removal, and quasi-conformal distortion metrics.
-
-Extended from **CSE570Project3** as an educational and experimental implementation of
-spherical mesh parameterization.
+Maps a closed genus-zero triangular mesh onto the unit sphere `S²` by minimizing
+discrete harmonic energy — pure Python over NumPy and SciPy, with a half-edge mesh
+representation, cotangent-weighted operators, manifold-constrained optimization, fold
+removal, and quasi-conformal distortion metrics. Extended from **CSE570Project3**.
 
 ![Spherical conformal parameterization of a cortical surface mesh](Python_latest/output/comparison_fast.png)
 
@@ -39,78 +34,43 @@ On the final map 88 % of faces have `|μ| < 0.1` (dilatation `K < 1.22`) and 98 
 with every face positively oriented. Full table including the bunny mesh and the second
 solver in §9.
 
-## What This Implementation Does Differently
+## Technical Highlights
 
 Most spherical-parameterization code reports a harmonic energy and stops. Energy alone
-does not tell you whether the result is usable: the harmonic energy is **blind to
-folding**, so a folded, non-invertible map can have a perfectly attractive energy value.
-The emphasis here is on proving properties of the output rather than displaying a
-number that looks good.
+does not say whether the result is usable: harmonic energy is **blind to folding**, so a
+folded, non-invertible map can carry a perfectly attractive energy value. The emphasis
+here is on proving properties of the output rather than reporting a number that looks
+good.
 
 - **Bijectivity is verified, not assumed.** The total signed solid angle over all
-  spherical triangles is checked to be exactly `4π` (degree 1) with every face
-  positively oriented. Without that check, the flow silently ships a map with folds.
+  spherical triangles is checked to be exactly `4π` — degree 1 — with every face
+  positively oriented. Without that check the pipeline silently ships a folded map.
 
 - **Folds are removed, not tolerated.** A local untangling pass (§4.6) closes the gap
-  that harmonic energy cannot see, taking 4 residual inverted faces to 0 at a cost of
-  0.14 % in energy.
+  harmonic energy cannot see, taking 4 residual inverted faces to 0 for 0.14 % in energy.
 
-- **A conformality bound ties two independent code paths together.** `E(f) ≥ Area(f(M))`
+- **A conformality bound cross-checks two independent code paths.** `E(f) ≥ Area(f(M))`,
   with equality exactly when the map is conformal. The left side comes from the
   cotangent Laplacian, the right from the image geometry; nothing forces them to agree,
-  so their agreement to 1.2 % is real evidence (§8).
+  so agreement to 1.2 % is real evidence (§8).
 
-- **Two independent solvers cross-check each other.** Different search directions,
-  retractions, and line-search quantities, converging to within 0.18 % — as do the two
-  independent mesh parsers, to all printed digits.
+- **Two solvers and two parsers cross-check each other.** The solvers use different
+  search directions, retractions, and line-search quantities and converge to within
+  0.18 %; the OFF and OBJ construction paths agree to all printed digits.
 
 - **The optimization is written from first principles.** Manifold retraction, Riemannian
   gradient, Barzilai–Borwein steps, Zhang–Hager nonmonotone line search, and the Wen–Yin
-  Cayley curvilinear method with its Sherman–Morrison–Woodbury low-rank form — a
-  **3338× speedup** on the Cayley step. No `scipy.optimize` is involved.
+  Cayley curvilinear method in its Sherman–Morrison–Woodbury low-rank form — a **3338×
+  speedup** on the Cayley step. SciPy supplies sparse matrices and the eigensolver; no
+  `scipy.optimize` solver is involved.
 
-- **The tests are mutation-verified.** Every numerical test was checked by reintroducing
-  the original defect and confirming it fails. Two of the first batch passed happily
-  against reinstated bugs and had to be rewritten (§6).
+- **The tests are mutation-verified.** All 45 tests pass, and every numerical one was
+  checked by reintroducing the original defect and confirming it fails. Two of the first
+  batch passed happily against reinstated bugs and had to be rewritten (§6).
 
-## Overview
-
-Spherical parameterization transforms a surface with sphere-like topology into a mapping
-
-```
-F : M → S²
-```
-
-assigning every mesh vertex a point on the unit sphere. This project approximates such a
-mapping by minimizing the discrete harmonic energy
-
-```
-E(F) = ½ tr(Fᵀ L F)
-```
-
-where `L` is a cotangent-weighted discrete Laplace–Beltrami operator, subject to
-`‖F_i‖₂ = 1` at every vertex. Section 1 states the problem precisely, including the
-second constraint that makes it well-posed.
-
-## Features
-
-- Half-edge representation for triangular surface meshes, with OFF and OBJ loading
-- Cotangent-weighted discrete Laplacian, assembled sparsely and vectorized over facets
-- Gauss-map and Laplace–Beltrami spectral initializations
-- Two hand-written manifold-constrained solvers: projected gradient with a
-  Barzilai–Borwein step, and a Wen–Yin Cayley curvilinear search in low-rank form
-- Zhang–Hager nonmonotone line search
-- Local untangling pass that removes residual folds, so the result is a genuine bijection
-- Quasi-conformal (Beltrami), area-distortion, map-degree, and conformality-gap metrics
-- Matplotlib figure comparing source and sphere, with a checkerboard conformality test
-- OBJ export for mapped meshes, normals, and intermediate results
-- 45 tests, the numerical half verified by mutation
-
-**On SciPy.** SciPy is used for sparse matrices and the eigensolver. The optimization
-routines themselves are written from first principles — no `scipy.optimize` solver is
-involved — which is the point of the exercise: the Laplace–Beltrami operator, harmonic
-maps, and manifold-constrained optimization are built directly rather than delegated to
-an off-the-shelf package.
+Also included: half-edge mesh with OFF and OBJ loading, Gauss-map and Laplace–Beltrami
+spectral initializations, OBJ export of every stage, and the Matplotlib figure that
+renders the checkerboard conformality test shown above.
 
 ---
 
@@ -592,22 +552,11 @@ colours.*
 | | Solver B | 10.06 s | `1.26996e+01` | 1.000 | +0.0122 | 0.0641 | 1.111 | 4 / 5000 (0.08 %) |
 | | + untangle | 0.87 s | `1.27179e+01` | 1.000 | +0.0136 | 0.0640 | 1.111 | **0 / 5000** |
 
-Three independent correctness signals:
+The three cross-checks summarized at the top of this file are visible in the table: the
+gap sits just above zero everywhere, the two solvers land on `1.26762e+01` and
+`1.26996e+01` for the brain, and both parsers give the same energy to all printed digits.
 
-1. **The conformality gap lands just above zero.** After untangling it is `+0.012`
-   (brain) and `+0.027` (bunny) — within a few percent of a bound that only a conformal
-   map attains, and on the correct side of it everywhere. The energy comes from the
-   cotangent Laplacian; the bound comes from the image geometry. Nothing forces them
-   to agree.
-
-2. **The two solvers agree.** Different search directions, retractions, and
-   line-search quantities, converging on the brain to `1.26762e+01` and `1.26996e+01`
-   — a 0.18 % spread.
-
-3. **The two parsers agree.** `brain.obj` and `brain_python.off` take entirely separate
-   construction paths and converge to the same energy to all printed digits.
-
-One entry above is a diagnostic rather than a result: the brain's Gauss map starts at
+One entry is a diagnostic rather than a result: the brain's Gauss map starts at
 **degree 2**, wrapping the sphere twice, which is the origin of its 47.9 % inverted
 faces. The flow recovers degree 1 from it.
 
@@ -639,14 +588,11 @@ whose removal needs the pinned boundary to move would defeat it. A fold-free
 initialization (Tutte embedding of the cut disk, then inverse stereographic projection)
 would remove the need for the pass entirely.
 
-Of its two knobs, **`--untangle-steps` is the one that decides success**, not
-`--untangle-rings`. Sweeping both on the bunny (22 residual folds) and on deliberately
-under-converged runs, every observed failure was a penalty weight that never got large
-enough, and every one was fixed by allowing more weight escalation rather than a wider
-patch — `rings=0` fails at 6 escalation steps and succeeds at 10. Widening the patch
-costs time and lets the penalty perturb more of an already-good map: on the bunny,
-`rings=5` raised the energy by 10 % where `rings=1` raised it by 0.002 %. Raise
-`--untangle-steps` first; reach for `--untangle-rings` only if that does not help.
+Of its two knobs, **`--untangle-steps` decides success, not `--untangle-rings`.** Across
+a sweep of both, every observed failure was a penalty weight that never grew large
+enough, and every one was fixed by more escalation rather than a wider patch. Widening
+the patch also costs conformality: on the bunny `rings=5` raised the energy by 10 % where
+`rings=1` raised it by 0.002 %.
 
 **Spectral initialization is worse than the Gauss map here**, despite starting at a much
 lower energy (20.7 vs 164 on the bunny). It begins in a heavily folded configuration
